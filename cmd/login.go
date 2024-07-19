@@ -4,14 +4,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"strings"
 
-	// juju/persistent-cookiejar
-
+	"github.com/juju/persistent-cookiejar"
 	"github.com/spf13/cobra"
 )
 
 // loginCmd represents the login command
+// TODO: scanf login details and make password invisible (and 2fa)
 var loginCmd = &cobra.Command{
 	Use:   "login user password",
 	Short: "Login to leetcode account with Github",
@@ -22,12 +24,17 @@ var loginCmd = &cobra.Command{
 			return
 		}
 		username := args[0]
-		// password := args[1]
+		password := args[1]
 
-		var client http.Client
+		jar, _ := cookiejar.New(nil)
+
+		client := http.Client{
+			Jar: jar,
+		}
 
 		// leetcodeLogin := "https://leetcode.com/accounts/github/login/?next=%2F"
 		githubLogin := "https://github.com/login"
+		githubSession := "https://github.com/session"
 
 		res, err := client.Get(githubLogin)
 		if err != nil {
@@ -43,26 +50,59 @@ var loginCmd = &cobra.Command{
 		bodyString := string(bodyBytes)
 
 		authRegex, _ := regexp.Compile(`name="authenticity_token" value="(.*?)"`)
-		authToken := authRegex.FindString(bodyString)
+		authToken := authRegex.FindStringSubmatch(bodyString)
 
-		idRegex, _ := regexp.Compile(`name="ga_id" value="(.*?)"`)
-		gaId := idRegex.FindString(bodyString)
+		// idRegex, _ := regexp.Compile(`name="ga_id" value="(.*?)"`)
+		// gaId := idRegex.FindStringSubmatch(bodyString)
+		// if len(gaId) == 0 {
+		// 	gaId = []string{"", ""}
+		// }
 
 		timestampRegex, _ := regexp.Compile(`name="timestamp" value="(.*?)"`)
-		timestamp := timestampRegex.FindString(bodyString)
+		timestamp := timestampRegex.FindStringSubmatch(bodyString)
 
 		timestampSecretRegex, _ := regexp.Compile(`name="timestamp_secret" value="(.*?)"`)
-		timestampSecret := timestampSecretRegex.FindString(bodyString)
+		timestampSecret := timestampSecretRegex.FindStringSubmatch(bodyString)
 
-		if !(authToken != "" && timestamp != "" && timestampSecret != "") {
-			fmt.Println("Couldn't find required fields")
+		if len(authToken) == 0 || len(timestamp) == 0 || len(timestampSecret) == 0 {
+			fmt.Println("Failed to find required values")
 			return
 		}
 
-		fmt.Println(authToken)
-		fmt.Println(gaId)
-		fmt.Println(timestamp)
-		fmt.Println(timestampSecret)
+		signinURI := "?x=Sign%20in"
+		form := url.Values{}
+		form.Add("login", username)
+		form.Add("password", password)
+		form.Add("authenticity_token", authToken[1])
+		form.Add("commit", signinURI)
+		form.Add("ga_id", "")
+		form.Add("webauthn-support", "supported")
+		form.Add("webauthn-iuvpaa-support", "unsupported")
+		form.Add("return_to", "")
+		form.Add("required_field", "")
+		form.Add("timestamp", timestamp[1])
+		form.Add("timestamp_secret", timestampSecret[1])
+
+		req, err := http.NewRequest("POST", githubSession, strings.NewReader(form.Encode()))
+		if err != nil {
+			panic(err)
+		}
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		sessionRes, err := client.Do(req)
+		if err != nil {
+			panic(err)
+		}
+
+		defer sessionRes.Body.Close()
+
+		fmt.Println(sessionRes.StatusCode)
+		sbodyBytes, err := io.ReadAll(sessionRes.Body)
+		if err != nil {
+			print(err)
+		}
+		sbodyString := string(sbodyBytes)
+		fmt.Println(sbodyString)
+		// Save cookie jar afterwards https://akimon658.github.io/en/p/2022/go-local-cookie/
 
 		fmt.Printf("Logged into Leetcode as %s", username)
 	},
